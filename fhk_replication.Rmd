@@ -78,7 +78,7 @@ sho_data <-
     inner_join(pilot, by = c("gvkey1", "SHO")) %>%
     rename(sho = SHO) %>%
     mutate(gvkey = str_pad(gvkey1, width = 6, side = "left", pad = "0")) %>%
-    select(gvkey, sho)
+    select(gvkey, sho) 
   
 sho_firm_years <-
     pmda %>%
@@ -129,6 +129,21 @@ Based on my analysis, these are the correct GVKEY matches and all three cases sh
 | MRO    | 010970|
 
 - Picking one of these tickers, how can you match that ticker to the GVKEY value I have provided? Do you agree with my approach?
+
+Fixing the issue with mismatched GVKEYs (and issues related to which firms should be used as controls) is complicated, so we won't attempt that here.
+
+But another issue is implicit in the code below:
+
+```{r dependson="sho_data"}
+sho_data %>% 
+  count(gvkey) %>% 
+  arrange(desc(n))
+```
+
+- What is the issue implied in the above? 
+How would you fix this issue?
+- Does fixing this issue affect the results in any way?
+Why or why not?
 
 ### Fama-French data
 
