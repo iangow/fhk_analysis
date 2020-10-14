@@ -331,7 +331,7 @@ df_da2 <-
                        data = select(., -ff48, -fyear))) %>%
     unnest(model) %>%
     select(gvkey, fyear, .resid) %>%
-    dplyr::rename(da2 = .resid)
+    rename(da2 = .resid)
 
 fm_da3 <-
     for_disc_accruals %>% 
@@ -342,7 +342,8 @@ fm_da3 <-
     pivot_wider(names_from = "term", values_from = "estimate", 
                 names_prefix = "b_")
 
-df_da3 <- for_disc_accruals %>%
+df_da3 <- 
+    for_disc_accruals %>%
     left_join(fm_da3, by = c("ff48", "fyear")) %>%
     mutate(hat = `b_(Intercept)` + one_at * b_one_at + ppe_at * b_ppe_at + salerect_c_at * b_sale_c_at,
            da3 = ta_at - hat) %>%
@@ -355,7 +356,7 @@ df_da4 <-
                           data = select(., -ff48, -fyear))) %>%
     unnest(model) %>%
     select(gvkey, fyear, .resid) %>%
-    dplyr::rename(da4 = .resid)
+    rename(da4 = .resid)
 
 fm_da5 <-
     for_disc_accruals %>% 
@@ -383,7 +384,7 @@ df_da6 <-
                           data = select(., -ff48, -fyear))) %>%
     unnest(model) %>%
     select(gvkey, fyear, .resid) %>%
-    dplyr::rename(da_lr2 = .resid)
+    rename(da_lr2 = .resid)
 
 fm_da7 <-
     for_disc_accruals %>% 
@@ -411,7 +412,7 @@ df_da8 <-
                           data = select(., -ff48, -fyear))) %>%
     unnest(model) %>%
     select(gvkey, fyear, .resid) %>%
-    dplyr::rename(da_lr4 = .resid)
+    rename(da_lr4 = .resid)
 
 merged <-
     for_disc_accruals %>%
