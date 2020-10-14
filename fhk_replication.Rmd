@@ -112,7 +112,7 @@ sho_dupes
 From the analysis above, we see that tickers `X`, `ITG`, and `MEE` have zero for `sho`, but are associated with `gvkey` (and `permno`) values where `sho` is one for a different ticker.
 The ticker (`rsticker`) values in `sho.sas7bdat` seem to match those available on the SEC's [website]( https://www.sec.gov/rules/other/34-50104.htm).
 
-```{r stocknames}
+```{r stocknames, include=FALSE}
 pg <- dbConnect(RPostgres::Postgres())
 
 stocknames <- tbl(pg, sql("SELECT * FROM crsp.stocknames"))
