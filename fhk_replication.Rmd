@@ -24,7 +24,7 @@ To run this code, you will need:
 1. An internet connection. 
 (We get data from WRDS and a website.)
 2. A WRDS ID. 
-Before running the code, tell R your WRDS ID and password by running the following line:
+Before running the code, tell R your WRDS ID and password by running the following line in the R console before attempting to compile this code:^[Don't edit the line below in the source file, as (i) passwords don't belong in source code and (ii) this line is not run in compiling this file due to the `eval=FALSE` flag embedded in the code.]
 
 ```{r eval=FALSE, include=TRUE}
 Sys.setenv(PGUSER="your_WRDS_ID", PGPASSWORD="your_password")
