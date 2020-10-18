@@ -941,7 +941,7 @@ reg_year_fe <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
 
 # Do not define the interaction term, but use multiply operator directly
 reg_year_fe_al <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
-    model <- paste0(y, "  pilot * during * post + ", 
+    model <- paste0(y, " ~ pilot * during + pilot * post + ", 
                       paste(controls, collapse = " + "),
                       if_else(firm_fe, "| gvkey + year ", "| year "),
                     "| 0 ",
@@ -980,13 +980,12 @@ stargazer(fm_year_fe,
 
 
 # Use multiply operator, instead of pre-defined interaction
-# fm_year_fe_al <- lapply(lhs, reg_year_fe_al, firm_fe = FALSE, cl_2 = TRUE)
-#stargazer(fm_year_fe_al, 
-#          omit=paste0("^(", paste(controls, collapse="|"), ")$"),
-#          column.labels = gsub("_", "\\\\_", lhs),
-#         header=FALSE,
-#         keep.stat = c("n", "rsq", "chi2"))
-# I do not know why using multiply operator does not work.
+fm_year_fe_al <- lapply(lhs, reg_year_fe_al, firm_fe = FALSE, cl_2 = TRUE)
+stargazer(fm_year_fe_al, 
+          omit=paste0("^(", paste(controls, collapse="|"), ")$"),
+          column.labels = gsub("_", "\\\\_", lhs),
+          header=FALSE,
+          keep.stat = c("n", "rsq", "chi2"))
 ```
 
 ```{r reg_firm_fes, echo=FALSE, warning=FALSE, message=FALSE, results="asis"}
