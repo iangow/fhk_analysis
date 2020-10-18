@@ -3,9 +3,9 @@ title: "FHK replication"
 author: "Ian Gow"
 date: '2020-10-13'
 output:
-  pdf_document: default
   html_document:
     df_print: paged
+  pdf_document: default
 classoption: landscape
 ---
 
@@ -27,7 +27,6 @@ To run this code, you will need:
 Before running the code, tell R your WRDS ID and password by running the following line:
 
 ```{r eval=FALSE, include=TRUE}
-Sys.setenv(PGUSER="your_WRDS_ID", PGPASSWORD="your_password")
 ```
 3. To install the libraries used in the following chunk of code. 
 For example, `install.packages("haven")`.
@@ -45,7 +44,6 @@ library(tidyr)
 library(broom)
 library(DBI)
 library(ggplot2)
-
 Sys.setenv(PGHOST="wrds-pgdata.wharton.upenn.edu", PGDATABASE="wrds", PGPORT=9737)
 ```
 
@@ -79,7 +77,13 @@ sho_data <-
     rename(sho = SHO) %>%
     mutate(gvkey = str_pad(gvkey1, width = 6, side = "left", pad = "0")) %>%
     select(gvkey, sho) 
-  
+
+# Find firms with more than one 'gvkey'
+sho_data2 <-
+    pilot %>%
+    group_by(gvkey1) %>%
+    filter(n() > 1) 
+
 sho_firm_years <-
     pmda %>%
     mutate(gvkey = str_pad(gvkey1, width = 6, side = "left", pad = "0")) %>%
@@ -89,8 +93,12 @@ sho_firm_years <-
     select(gvkey, fyear, datadate, sho)
 ```
 
-In constructing the `PILOT` indicator, FHK omit cases (`gvkey1` values) where there is more than one distinct value for the indicator.
+- In constructing the `PILOT` indicator, FHK omit cases (`gvkey1` values) where there is more than one distinct value for the indicator.
 A question is: Who are these firms? Why is there more than one value for `PILOT` for these firms? And does omission of these make sense?
+
+   A: As the dataframe 'sho_dupes' shows, when one 'gvkey' has multiple tickers, and SEC chose pilot firms based on tickers,there will be more than one distinct value for the indicator. For example, in 2001, USX, the holding company that owned United States Steel and Marathon, spun off the steel business and, in 2002, USX renamed itself Marathon Oil Corporation. The ticker of United States Steel is 'X', and the ticker of Marathon Oil Corporation is 'MRO', but they have the same 'gvkey' '007017'. SEC chose Marathon Oil Corporation as the pilot firm, not United States Steel.
+   It does not make sense to omit these observations. Instead, FHK should choose observations by strictly following SEC's way, i.e., choosing the right ticker and company.
+
 
 ```{r dependson="sho_data"}
 sho_dupes <-
@@ -130,6 +138,26 @@ Based on my analysis, these are the correct GVKEY matches and all three cases sh
 
 - Picking one of these tickers, how can you match that ticker to the GVKEY value I have provided? Do you agree with my approach?
 
+  A: I searched Compustat with Ticker and gvkey, and found the Column 1-5 of the table below. I think your match of the ticker 'FLR' is correct, but the matches of 'JEF' and 'MRO' are wrong.
+
+   RSNAME                       Ticker      GVKEY      First_date   Last_date  GVEKY_FHK     GVKEY_Ian  SEC
+   Marathon Oil Corp             MRO         007017     1950         2019       007017        010970     Yes
+   USX Corp-Consolidated         MROX.CM     010970     1950         2000
+   (Spun off to MRO and X in 2001 )
+   UNITED STATES STEEL CORP	     X	         023978	    1950	       2019       007017
+   
+   MASSEY ENERGY CORP            MEE	       141400	    1996	       2010       141400      
+   FLUOR CORP	                   FLR	       004818	    1950	       2018       141400        004818     Yes
+   (Spun off MEE in 1999)
+   
+   INVESTMENT TECHNOLOGY         ITG	       030146	    1993	       2018       030146
+   (INVESTMENT TECHNOLOGY GP INC)	 
+   JEFFERIES GROUP INC           JEF	       006682	    1950	       2019       030146        006239     Yes
+   (JEFFERIES FINANCIAL GRP INC)   
+   JEFFERIES GROUP LLC           LUK2	       006239	    1982	       2019
+   (is a wholly subsidiary of JEF, spun off ITG in 1999)
+   
+   
 Fixing the issue with mismatched GVKEYs (and issues related to which firms should be used as controls) is complicated, so we won't attempt that here.
 
 But another issue is implicit in the code below:
@@ -138,12 +166,26 @@ But another issue is implicit in the code below:
 sho_data %>% 
   count(gvkey) %>% 
   arrange(desc(n))
+
+# Delete the duplicated gvkey
+sho_data_del<-
+    sho_data %>%
+    group_by(gvkey) %>%
+    filter(row_number() == 1) %>%
+    ungroup()
+
+sho_data <- sho_data_del
 ```
 
-- What is the issue implied in the above? 
-How would you fix this issue?
-- Does fixing this issue affect the results in any way?
-Why or why not?
+- What is the issue implied in the above? How would you fix this issue?
+- Does fixing this issue affect the results in any way? Why or why not?
+
+  A: 'gvkey' is the company-level identifier, but 'lpermno' is the security-level identifier. If a company issues multiple securities, it may have one 'gvkey' and multiple 'lpmermno', and then the count of 'gvkey' will be larger than 1. For example, '001076'(AARON RENTS INC) and '002220'(BIO RAD LABORATORIES INC) both have duall class shares.
+ 
+   I think FHK should delete the duplicates because FHK studies firm-level earnings management. The duplicates will increase the total observations, but it is uncertain how they will influence the results because it is uncertain about whether the treatment group or the non-treatment group includes more duplicates and whether these duplicates will drive the results.
+   
+   I find that fixing this issue does not affect the results.
+   
 
 ### Fama-French data
 
@@ -151,6 +193,68 @@ I grab this data set directly from Ken French's website.
 
 ```{r ff_data, cache=TRUE}
 get_ff_ind <- function(num = 48) {
+  
+  # fileext gives the tempfile extension"
+    t <- tempfile(fileext = ".zip") 
+    
+    # If we set the num as 48, then the link is https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/Siccodes48.zip
+    
+    url <- paste0("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/Siccodes", num, ".zip")
+    
+    # Download a zip file from the link"
+    download.file(url, t)
+    
+    # The number of industries 1-48, has 3 spaces. The name of the industries has 7 spaces. The characters after the name are defined as "sic_range"
+    
+    ff_data <- 
+        readr::read_fwf(unzip(t), 
+                 col_positions = readr::fwf_widths(c(3, 7, NA),
+                                            c("ff_ind", "ff_ind_short_desc", "sic_range")),
+                col_types = "icc") %>%
+      
+        # Add a column, ff_inde_desc. If the short name of the industries is not null, ff_inde_dec is defined as sic_range, otherwise defined as NA. That is, ff_ind_desc of the first line of 48 groups will have values "Agriculture", "Food products" etc, and ff_ind_desc of the lines below the first will be NA.
+        mutate(ff_ind_desc = if_else(!is.na(ff_ind_short_desc), sic_range, NA_character_)) %>%   
+       
+      # Fill missing values. Here, ff_ind, ff_ind_short_desc, ff_ind_desc are missing except for the first line of 48 industries. Fill the missing values with the value of the first line.
+        tidyr::fill(ff_ind, ff_ind_short_desc, ff_ind_desc) %>%    
+       
+      # Choose lines in which sic_range startes with a number, 0 to 9. Thus,the first line of each industry is deleted because sic_range of these first lines do not contain the number of industry codes. 
+      filter(grepl("^[0-9]", sic_range)) %>%    
+        
+      # Extract sic_range into three columns "sic_min", "sic_max", "sic_desc". For example, '0100-0199 Agricultural production - crops', 0100 starts with any number from 0 to 9, so 0100 is defined as sic_min. Similarly, 0199 is defined as sic_max. 'Agricultural production - crops' is defined as sic_desc. "convert = True" converts 0100 to 100, but I do not understand how. I found that if we do not define convert = TRUE, the code can also work well. See "Change code to replicate Fama-French 49 industry data".
+      tidyr::extract(sic_range, 
+                into = c("sic_min", "sic_max", "sic_desc"),
+                regex = "^([0-9]+)-([0-9]+)(.*)$",
+                convert = TRUE) %>%
+        
+      # Remove white space before sic_desc, but I  do not think we need this line of code because we do not use sic_desc later.
+        mutate(sic_desc = trimws(sic_desc)) %>%     
+      
+      # Add a column ff_ind_category, ff_48, but I  do not think we need this line of code because we do not use ff_ind_category later and we can just 'select(everything())'.
+        mutate(ff_ind_category = paste0("ff_", num)) %>%   
+        select(ff_ind_category, everything())
+    
+    ff_data
+}
+
+
+# Get Fama-French 48-industry data
+ff_data <-
+    get_ff_ind(48) %>%
+    # Define that the sic_min and sic_max correspond to each specific row.
+    rowwise() %>% 
+    # Add a column 'sich', which is a list from sic_min to  sic_max
+    mutate(sich = list(seq(from = sic_min, to = sic_max))) %>% 
+    # Make each element of the list its own row.
+    unnest(sich) %>% 
+    rename(ff48 = ff_ind) %>%
+    select(ff48, sich)
+
+
+
+# Change code to replicate Fama-French 49 industry data
+
+get_ff_ind2 <- function(num = 49) {
     t <- tempfile(fileext = ".zip") 
     
     url <- paste0("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/Siccodes", num, ".zip")
@@ -167,28 +271,36 @@ get_ff_ind <- function(num = 48) {
         filter(grepl("^[0-9]", sic_range)) %>%
         tidyr::extract(sic_range, 
                 into = c("sic_min", "sic_max", "sic_desc"),
-                regex = "^([0-9]+)-([0-9]+)(.*)$",
-                convert = TRUE) %>%
-        mutate(sic_desc = trimws(sic_desc)) %>%
-        mutate(ff_ind_category = paste0("ff_", num)) %>%
-        select(ff_ind_category, everything())
+                regex = "^([0-9]+)-([0-9]+)(.*)$") %>%
+        mutate(sic_desc = trimws(sic_desc)) %>%  
+        #mutate(ff_ind_category = paste0("ff_", num)) %>%
+        #select(ff_ind_category, everything())
+        select(everything())
     
     ff_data
 }
 
-# Get Fama-French 48-industry data
-ff_data <-
-    get_ff_ind(48) %>%
+
+# Get Fama-French 49-industry data
+ff_data49 <-
+    get_ff_ind2(49) %>%
     rowwise() %>% 
     mutate(sich = list(seq(from = sic_min, to = sic_max))) %>% 
     unnest(sich) %>% 
-    rename(ff48 = ff_ind) %>%
-    select(ff48, sich)
+    rename(ff49 = ff_ind) %>%
+    select(ff49, sich)
+
+
 ```
 
-- Set `num <- 48` and work through the body of the `get_ff_ind` function line by line?
-Do you understand what the code is doing?
+- Set `num <- 48` and work through the body of the `get_ff_ind` function line by line? Do you understand what the code is doing?
+
+  A: See the notes that I put above each line of code.
+
 - What are these lines doing? 
+
+  A: These linse set a list from sic_min to sic_max for each row, and then make each element of the list its own row, producing multiple rows, the number of which equals to the number of elements of the list.
+
 ```{r eval=FALSE}
     mutate(sich = list(seq(from = sic_min, to = sic_max))) %>% 
         unnest(sich) %>% 
@@ -210,12 +322,31 @@ compustat_annual <-
 			ib, ibc, oancf, xidoc, at, ppegt, sale, rect, ceq, csho, prcc_f) %>%
     mutate(fyear = as.integer(fyear)) %>%
     collect()
+
 ```
 
 ```{r controls, dependson="pg_data", cache=TRUE}
-controls_a <- 	
+controls_a <- 	    # 78301 observations
     compustat_annual %>%
-    filter(!between(sich, 6000, 6999) | !between(sich, 4900, 4949)) %>%
+    # Delete Financial Institutions 6000-6499, Insurance and Real Estate 6500-6999, Utilities 4900-4999.
+    # I think the operator '|' should be '&'. Otherwise, we can find 6000 - 6999 and 4900 - 4949 after filtering. I change the code and get 'controls_a_al'. This change will influence the filter of 'fyear == lag(fyear) + 1'.
+    # filter(!between(sich, 6000, 6999) | !between(sich, 4900, 4949)) %>%
+    filter(!between(sich, 6000, 6999) & !between(sich, 4900, 4949)) %>%
+    group_by(gvkey) %>%
+    arrange(fyear) %>%
+    mutate(lag_fyear = lag(fyear),
+           mtob = if_else(lag(ceq) != 0, 
+                          lag(csho) * lag(prcc_f)/lag(ceq), NA_real_),
+           # common shares outstanding * price close / common equity total
+           leverage = if_else(dltt + dlc + seq != 0, 
+                              (dltt + dlc) / (dltt + dlc + seq) * 100, NA_real_),
+           roa = if_else(lag(at) > 0, oibdp/lag(at), NA_real_)) %>%
+    # filter(fyear == lag(fyear) + 1) %>%
+    select(gvkey, datadate, fyear, at, mtob, leverage, roa, sich)
+
+controls_a_all<- 	   # 92016 observations
+    compustat_annual %>%
+    filter(!between(sich, 6000, 6999) & !between(sich, 4900, 4949)) %>%
     group_by(gvkey) %>%
     arrange(fyear) %>%
     mutate(lag_fyear = lag(fyear),
@@ -224,45 +355,112 @@ controls_a <-
            leverage = if_else(dltt + dlc + seq != 0, 
                               (dltt + dlc) / (dltt + dlc + seq) * 100, NA_real_),
            roa = if_else(lag(at) > 0, oibdp/lag(at), NA_real_)) %>%
-    filter(fyear == lag(fyear) + 1) %>%
-    select(gvkey, datadate, fyear, at, mtob, leverage, roa)
+    #filter(fyear == lag(fyear) + 1) %>%
+    select(gvkey, datadate, fyear, at, mtob, leverage, roa, sich)
 
-controls_b <-
-    controls_a %>%
+
+controls_a_dele<- 	 # 228 observations. 228 is not the difference between 92016 and 7830. In the case of 'gveky' ' 001618', year 2000 is deleted but because it is the first year of 'gveky' ' 001618', it is not filtered as filter(fyear != lag(fyear) + 1), but it indeed is deleted.
+    compustat_annual %>%
+    filter(!between(sich, 6000, 6999) & !between(sich, 4900, 4949)) %>%
     group_by(gvkey) %>%
     arrange(fyear) %>%
-    fill(at, mtob, leverage, roa) %>%
-    ungroup()
+    mutate(lag_fyear = lag(fyear),
+           mtob = if_else(lag(ceq) != 0, 
+                          lag(csho) * lag(prcc_f)/lag(ceq), NA_real_),
+           leverage = if_else(dltt + dlc + seq != 0, 
+                              (dltt + dlc) / (dltt + dlc + seq) * 100, NA_real_),
+           roa = if_else(lag(at) > 0, oibdp/lag(at), NA_real_)) %>%
+    filter(fyear != lag(fyear) + 1) %>%
+    select(gvkey, datadate, fyear, at, mtob, leverage, roa, sich)
 
-controls_fyear <-
-    controls_b %>%
-    group_by(fyear) %>%
-    summarize_at(vars(at, mtob, leverage, roa), ~ mean(., na.rm=TRUE))
+# Check missing sich
 
-df_controls <-
-  controls_b %>%
-  inner_join(controls_fyear, by = "fyear", suffix=c("", "_avg")) %>%
-  mutate(at = coalesce(at, at_avg),
-         mtob = coalesce(mtob, mtob_avg),
-         leverage = coalesce(leverage, leverage_avg),
-         roa = coalesce(roa, roa_avg)) %>%
-  select(gvkey, fyear, at, mtob, leverage, roa)
+controls_a_all_na<- 	   # I find that 'NA' is between(sich, 6000, 6999), so when we filter filter(!between(sich, 6000, 6999)), 'NA' is also deleted.
+    compustat_annual %>%
+    filter(between(sich, 6000, 6999)) %>%
+    group_by(gvkey) %>%
+    arrange(fyear) %>%
+    mutate(lag_fyear = lag(fyear),
+           mtob = if_else(lag(ceq) != 0, 
+                          lag(csho) * lag(prcc_f)/lag(ceq), NA_real_),
+           leverage = if_else(dltt + dlc + seq != 0, 
+                              (dltt + dlc) / (dltt + dlc + seq) * 100, NA_real_),
+           roa = if_else(lag(at) > 0, oibdp/lag(at), NA_real_)) %>%
+    #filter(fyear == lag(fyear) + 1) %>%
+    select(gvkey, datadate, fyear, at, mtob, leverage, roa, sich)
+
+#controls_b <-
+#    controls_a %>%
+#    group_by(gvkey) %>%
+#    arrange(fyear) %>%
+#    fill(at, mtob, leverage, roa) %>%
+#   ungroup()
+
+
+#controls_fyear <-
+#    controls_b %>%
+#    group_by(fyear) %>%
+#    summarize_at(vars(at, mtob, leverage, roa), ~ mean(., na.rm=TRUE))
+
+#df_controls <-     # 92016 observations
+#  controls_b %>%
+#  inner_join(controls_fyear, by = "fyear", suffix=c("", "_avg")) %>%
+#  mutate(at = coalesce(at, at_avg),
+#         mtob = coalesce(mtob, mtob_avg),
+#         leverage = coalesce(leverage, leverage_avg),
+#         roa = coalesce(roa, roa_avg)) %>%
+#  select(gvkey, fyear, at, mtob, leverage, roa)
+
+# Delete the missing values
+df_controls <- # 69448 observations
+  controls_a %>%
+  filter(!is.na(at) & !is.na(mtob) & !is.na(leverage) & !is.na(roa)) 
+  #select(gvkey, datadate, fyear, at, mtob, leverage, roa, sich)
+
 ```
 
 - Why is `filter(fyear == lag(fyear) + 1)` required?
-- What are the authors doing in the creation of `controls_b`? (Hint: The key "verb" is `fill`.) 
-Does this seem appropriate?
-- What are the authors doing in the creation of `df_controls` from `controls_fyear`?
-Does this seem appropriate?
-- How would you change the code to skip the two steps above? 
-Does doing so make a difference?
+  
+  A: Because when we generate mtob and roa, we use lag 1 data, and then for the first year of each firm 'gvkey', mtob and roa are missing. FHK want to delete the first year missing values and then fill missing values of later years.
+  
+  I think there is an issue in this step. Some firms have different sich in different years. After deleting sich 6000 - 6999 and 4900 - 4949, these firms do not have continuous years observations. For example, sich of 'gveky' ' 001618' in 1999, 2006, and 2007 is '6552', and sich in 2000 - 2005, 2008 - 2012 is 7389. After '6552' in 1999, 2006, and 2007 is deleted, year 2000 and 2008 do not have lag 1 year, so FHK delete 2000 and 2008. However, it is unnecessary to delete 2008 because FHK can fill 2008 with their methods.
+  
+  The unnecessary deletion also happens when sich 'NA' is deleted.
+  
+  I think FHK can do so by deleting the first row of each gvkey range by year.
+  
+  A related question is when sich or NA is deleted, and we use lag ib/at later, we may use not lag 1, but lag 2, 3, 4 or more.
+  
+  I solve the unnecessary deletion issue by omit the line " # filter(fyear == lag(fyear) + 1) %>%" and then 'filter(!is.na(at) & !is.na(mtob) & !is.na(leverage) & !is.na(roa))' when producing 'df_controls'.
+
+- What are the authors doing in the creation of `controls_b`? (Hint: The key "verb" is `fill`.) Does this seem appropriate?
+  
+  A: `controls_b` fill the missing values of 'at, mtob, leverage, roa' with the values in previous years, which have values (e.g., gvkey 129441 roa). This way is inappropriate because it implicitly assumes that ROA does not change every year, or follows a random walk, but this assumption is lack of evidence. FHK should check if they delete missing values, whether the resulsts will change.
+
+- What are the authors doing in the creation of `df_controls` from `controls_fyear`? Does this seem appropriate?
+ 
+  A: The authors fill the missing values with industry mean in the same year. For example, gvkey 001010 mtob is missing in 2000 to 2003, and is filled with industry average. After checking the original data, I find that prcc_f, i.e. price close, is missing in the four years. FHK should analyze the reason (e.g., M&A, bankruptcy, late reporting etc.), and then decide whether it is appropriate to use the industry average. If this company is in a special situation, it is inappropriate to do so. 
+
+- How would you change the code to skip the two steps above? Does doing so make a difference?
+ 
+  A: If we skip the two steps, df_controls will be  ‘filter(!is.na(at) & !is.na(mtob) & !is.na(leverage) & !is.na(roa))’ from 'controls_a'. I find that doing so makes the results more significant in 'CL_2=TRUE'., and the magnitudes of interaction coefficients bigger in 'CL_2=FALSE'.
+
 
 ```{r for_disc_accruals, dependson=c("ff_data", "pg_data"), cache=TRUE}
 ind_data <-
     compustat_annual %>%
     select(gvkey, fyear, sich) %>%
     inner_join(ff_data, by="sich") %>%
+    # Do not choose sich
     select(-sich)
+
+# Check why some observations are deleted after sich is matched. 2271 observations have sich, but cannot match ff48.
+ind_data_left <-
+    compustat_annual %>%
+    select(gvkey, fyear, sich) %>%
+    left_join(ff_data, by="sich") %>%
+    filter(is.na(ff48))
+    
 
 for_disc_accruals_a <-
     compustat_annual %>%
@@ -277,6 +475,7 @@ for_disc_accruals_b <-
     arrange(fyear) %>%
     filter(lag(at) > 0) %>%
     mutate(lag_fyear = lag(fyear),
+           # Nominator: income before extraordinary items - (operationg activities NCF - Extraordinary Items and Discontinued Operations Cash Flow)
            ta_at = (ibc - (oancf - xidoc)) / lag(at),
            one_at = 1/lag(at),
            ppe_at = ppegt / lag(at),
@@ -286,7 +485,7 @@ for_disc_accruals_b <-
            mb_lr = if_else(ceq != 0, csho * prcc_f / ceq, NA_real_)) %>%
     ungroup() %>%
     filter(lag_fyear == fyear - 1,
-           abs(ta_at) <= 1, 
+           abs(ta_at) <= 1,  # Is this criterion implicitly assumed?
            !is.na(salerect_c_at), !is.na(ta_at), !is.na(ppe_at)) %>%
     select(ff48, gvkey, fyear, ta_at, one_at, ppe_at, 
            sale_c_at, salerect_c_at, bm_lr, mb_lr) 
@@ -311,7 +510,8 @@ The following code estimates the discretionary-accrual models.
 fm_da1 <-
     for_disc_accruals %>%
     group_by(ff48, fyear) %>%
-    do(model = tidy(lm(ta_at ~ one_at + sale_c_at + ppe_at - 1, data = .))) %>%
+    do(model = tidy(lm(ta_at ~ one_at + sale_c_at + ppe_at - 1, data = .))) %>%   
+  # - 1 means omitting intercept. The Jones Model also does not include intercept, but FHK Model 3 and 4 on Page 1263 include an intercept. Do FHK also omit intercept in their code?
     unnest(model) %>%
     select(ff48, fyear, term, estimate) %>%
     pivot_wider(names_from = "term", values_from = "estimate", 
@@ -428,9 +628,18 @@ merged <-
 
 - Why does the code look different for the odd-numbered datasets (e.g., `df_da1`)
 and the even-numbered datasets (e.g., `df_da2`).
+  
+  A: df_da1 is obtained by ta_at - hat, and hat is the fitted value of normal accruals, but FHK use `salerect_c_at * b_sale_c_at` to get the fitted value. 
+  
+   df_da2 is the residual in the regression of ta_at on salerect_c_at and other same variables.
+   
 - Does the argument for using `salerect_c_at * b_sale_c_at` make sense to you?
+  
+  A: No, it is fine to use the modified Jones Model in Dechow, Sloan, and Sweeney (1995), but FHK should keep the regression model and the fitted model consistent.  
 
 ### Performance-matching code
+
+  The performance-matching code here is not to generate matched pilot firms and controlled firms, but to adjust discretionary accruals by matching each sample firm with the firm from the same fiscal year-industry that has the closest ib_at (FHK).
 
 ```{r pmdas, dependson=c("est_das", "pg_data"), cache=TRUE}
 perf <-
@@ -439,9 +648,46 @@ perf <-
     inner_join(
         compustat_annual %>% 
             mutate(fyear = fyear + 1), by = c("gvkey", "fyear")) %>%
+    # Income Before Extraordinary Items / total assets
     mutate(ib_at = if_else(at > 0, ib/at, NA_real_)) %>%
     select(gvkey, fyear, ff48, ib_at) 
-     
+
+# Check what 'fyear = fyear + 1' is doing by omitting this line    
+perf2 <-
+    merged %>%
+    select(gvkey, fyear, ff48) %>% 
+    inner_join(
+        compustat_annual, 
+          by = c("gvkey", "fyear")) %>%
+    mutate(ib_at = if_else(at > 0, ib/at, NA_real_)) %>%
+    select(gvkey, fyear, ff48, ib_at)
+
+# Match two datasets and then use lag     
+perf3 <-
+    merged %>%
+    select(gvkey, fyear, ff48) %>% 
+    inner_join(
+        compustat_annual, 
+          by = c("gvkey", "fyear")) %>%
+    mutate(ib_at = if_else(at > 0, ib/at, NA_real_)) %>%
+    mutate(ib_at_lag = lag(ib_at)) %>%
+    select(gvkey, fyear, ff48, ib_at, ib_at_lag)
+
+# Use lag in 'compustat_annual' and then match
+
+perf4 <-
+    merged %>%
+    select(gvkey, fyear, ff48) %>% 
+    inner_join(
+        compustat_annual %>% 
+          group_by(gvkey) %>%
+          arrange(fyear) %>%
+          mutate(ib_at = if_else(at > 0, ib/at, NA_real_)) %>%
+          mutate(ib_at = lag(ib_at)), by = c("gvkey", "fyear")) %>%
+    # Income Before Extraordinary Items / total assets
+    select(gvkey, fyear, ff48, ib_at)
+
+
 perf_match <-
     perf %>%
     inner_join(perf, by = c("fyear", "ff48"),
@@ -450,7 +696,13 @@ perf_match <-
     mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
     group_by(gvkey, fyear) %>%
     filter(perf_diff == min(perf_diff)) %>%
-    select(gvkey, fyear, ff48, gvkey_other)
+    select(gvkey, fyear, ff48, gvkey_other, perf_diff)
+
+# In Session 9, we match samples by predicting the probability of treatment. That method is different from how FHK match.
+#fm_match <- matchit(treat ~ mean_x, 
+  #                  method = "nearest", data = fm_psm$data,
+   #                 caliper = 0.02)
+
  
 perf_matched_accruals <-
     merged %>%
@@ -459,6 +711,7 @@ perf_matched_accruals <-
 
 pm_disc_accruals <-
     merged %>%
+   # I think it is unnecessary to match by 'ff48' because ('gvkey' and 'fyear') have defined a unique value. I use by = c("gvkey", "fyear") and get the same results for 'pm_disc_accruals'.
     inner_join(perf_match, by = c("ff48", "gvkey", "fyear")) %>%
     inner_join(perf_matched_accruals, by = c("fyear", "gvkey_other"),
                suffix = c("", "_other")) %>%
@@ -471,14 +724,54 @@ pm_disc_accruals <-
            da_lr3_adj = da_lr3 - da_lr3_other,
            da_lr4_adj = da_lr4 - da_lr4_other) %>%
     select(gvkey, fyear, matches("_adj"))
+    
+
+# Check whether a firm is used as a control just once
+pm_disc_accruals2 <-
+    merged %>%
+    inner_join(perf_match, by = c("ff48", "gvkey", "fyear")) %>%
+    inner_join(perf_matched_accruals, by = c("fyear", "gvkey_other"),
+               suffix = c("", "_other")) %>%
+    mutate(da1_adj = da1 - da1_other,
+           da2_adj = da2 - da2_other,
+           da3_adj = da3 - da3_other,
+           da4_adj = da4 - da4_other,
+           da_lr1_adj = da_lr1 - da_lr1_other,
+           da_lr2_adj = da_lr2 - da_lr2_other,
+           da_lr3_adj = da_lr3 - da_lr3_other,
+           da_lr4_adj = da_lr4 - da_lr4_other) %>%
+    select(everything())
+
+pm_disc_accruals2 %>% 
+  count(gvkey_other) %>% 
+  arrange(desc(n)) %>% 
+  filter(n >= 2)
+  
 ```
 
-- What does the line `mutate(fyear = fyear + 1)` effectively do? 
-Would it be possible to create `perf` using an alternative approach? (Hint: Use `lag`?)
-Does this give the same result?
+- What does the line `mutate(fyear = fyear + 1)` effectively do? Would it be possible to create `perf` using an alternative approach? (Hint: Use `lag`?) Does this give the same result?
+
+  A: The line `mutate(fyear = fyear + 1)` produces ib_at, which is ib / at with the value in the previous year (lag 1).
+  
+   It is possible to use 'lag'. If we match 'merged' and 'compustat_annual', calculate ib_at, and then use lag, we will cause missing values because the first year of a firm does not have its lag (as 'perf 3' shows). However, if we calculat ib_at, use lag, and then match 'merged' and 'compustat_annual', the reuslts are the same (as 'perf4' shows).
+
 - Does the code above ensure that a performance-matched control firm is used as a control just once?
 If so, which aspect of the code ensures this is true? 
 If not, how might you ensure this? (Just describe the approach in general; no need to do this.)
+
+   A: No, I find that 7,857 firms are used as a control more than once.
+   
+   When generating 'perf_match', we can use the code of 'perf-match', and then if we find one firm is used as a control more than once, we can choose the smallest perf_diff. For example, '001004' is used as a control for 13 firms, but we can choose the smallest perf_diff among the 13 pairs, so that '001004' is only used as a control once. Then, the residual 12 firms are matched again with all other firms except for '001004'. We can iterate this process until all firms are matched and a firm is used as a control just once.
+   
+   'perf' has 59,305 observations, but why 'perf_match' has 59,363 observations? 'merged' also has 59,305 observations. Why after inner_join 'perf_match' and 'merged', 'pm_disc_accruals' has 59,363 observations, more than 59,305?
+   
+   In the Chunk below, 'pm_disc_accruals_sorted' 'filter(row_number() == 1)' deletes duplicates of (gvkey, fyear). I  find that 'perf_match' chooses more than one controls for a firm. For example, 'gvkey' '008838' in fyear 2004 has three matched 'gvkey_other' '009267', '009655', and '012384', and perf_diff are all 0.0013764522. '009267', '009655', and '012384' indeed have the same ib_at (ib/at) in 2003, the lag of 2004.
+# gvkey     ib     	at	       ib/at
+# 009267'	7344.6	100864.6	0.07281642915353850000
+# 009655'	4896.4	67236.4	  0.07282364909483550000
+# 012384'	12241	  168091	  0.07282364909483550000
+   
+   Then, the match process may be more complicated because when we ensure that a firm is only used as a control once, we should not waste a firm as a control when we delete the duplicates of match with 'filter(row_number() == 1)'.
 
 ## Data preparation
 
@@ -490,11 +783,24 @@ pm_disc_accruals_sorted <-
     group_by(gvkey, fyear) %>%
     filter(row_number() == 1) %>%
     ungroup() 
+# After 'filter(row_number() == 1)', 'pm_disc_accruals_sorted' has 59,305 observations.
 
-sho_accruals_prewin <-
-  sho_firm_years %>%
-  left_join(df_controls, 
-            by = c("gvkey", "fyear")) %>%
+
+# Check which firms have more than 1 rows
+pm_disc_accruals_sorted2 <-
+    pm_disc_accruals %>%
+    group_by(gvkey, fyear) %>%
+    mutate(rownum = row_number()) %>%
+    ungroup() 
+
+
+sho_accruals_prewin <-   # 21,880 observations    
+  sho_firm_years %>%     # 21,880 observations
+  #left_join(df_controls,                          # Why left_join, not inner_join?
+  #          by = c("gvkey", "fyear")) %>%
+  # Because 'sho_firm_years' and 'df_controls' both have "datadate", I need to include "datadate" in match criteria. Otherwise, 'sho_accruals_prewin' will include two columns "datadate.x" and "datadate.y", and then the code later cannot find 'datadate'.
+  left_join(df_controls,                          
+            by = c("gvkey", "fyear", "datadate")) %>%  
   left_join(pm_disc_accruals_sorted, 
             by = c("gvkey", "fyear"))
 ```
@@ -514,21 +820,67 @@ win_vars <- c("at", "mtob", "leverage", "roa", "da1_adj", "da2_adj",
                  "da3_adj", "da4_adj", "da_lr1_adj", "da_lr2_adj", 
                  "da_lr3_adj", "da_lr4_adj")
 
-sho_accruals <-
-    sho_accruals_prewin %>%
+# Winsorize "within each year" at the 1%/99% level
+sho_accruals <-              # 21,880 observations
+    sho_accruals_prewin %>%  # 21,880 observations
     group_by(fyear) %>%
     mutate_at(all_of(win_vars), winsorize, prob=0.01) %>%
     ungroup()
+
+# Check how 'sho_accruals_prewin' changes after winsorization.
+
+# summary(sho_accruals_prewin),the output is too long, I treat summary as a comment here.
+
+# summary(sho_accruals)
+
+# Winsorize "across sample years" at the 1%/99% level 
+sho_accruals_sam <-              # 21,880 observations
+    sho_accruals_prewin %>%  # 21,880 observations
+    #group_by(fyear) %>%
+    mutate_at(all_of(win_vars), winsorize, prob=0.01) %>%
+    ungroup()
+
+# summary(sho_accruals_sam)
+
+# Winsorize "within each year" at the 2%/98% level
+sho_accruals_2per <-              # 21,880 observations
+    sho_accruals_prewin %>%  # 21,880 observations
+    group_by(fyear) %>%
+    mutate_at(all_of(win_vars), winsorize, prob=0.02) %>%
+    ungroup()
+# summary(sho_accruals_2per)
+
+
+# Winsorize "across sample years" at the 2%/98% level
+sho_accruals_sam_2per <-              # 21,880 observations
+    sho_accruals_prewin %>%  # 21,880 observations
+    #group_by(fyear) %>%
+    mutate_at(all_of(win_vars), winsorize, prob=0.02) %>%
+    ungroup()
+# summary(sho_accruals_sam_2per)
+
 ```
 
 - In an online appendix BDLYY say "FHK winsorize covariates for their covariate balance table at 1/99%. We inferred that they also winsorized accruals at this level. Whether they winsorize across sample years or within each year, they do not specify."
-The code above winsorized within each year.
-How would you modify the code to winsorize "across sample years? Does it make a difference?
-- How would you modify the code to winsorize at the 2%/98% level? Does this make a difference?
-- How would you modify the code to not winsorize at all? Does this make a difference?
+The code above winsorized within each year. How would you modify the code to winsorize "across sample years"? Does it make a difference?
+  
+  A: If we delete the line 'group_by(fyear) %>%', the code will winsorize "across sample years". I find that the min after winsorizing  "across sample years" is greater than after winsoring within each year, and the max of the former is smaller than the latter. That is, winsorizing "across sample years" makes the sample more centralized than winsoring within each year, i.e. the range is smaller. The reason may be that some years have values that are more extreme.
+    The coefficients of the interaction term are more significant and with greater magnitude.
 
+- How would you modify the code to winsorize at the 2%/98% level? Does this make a difference?
+  
+  A: Define prob = 0.02 in the line 'mutate_at(all_of(win_vars), winsorize, prob=0.02)'. Winsorizing at the 2%/98% level makes the sample more centralized.
+     The magnitude of the interaction term coefficients are smaller than that  in winsorizing at 1%/99% level.
+
+- How would you modify the code to not winsorize at all? Does this make a difference?
+  
+  A: The code will be ' sho_accruals <-  
+        sho_accruals_prewin '.
+        
+    No winsorization makes the magnitudes of the interaction coefficients greater.
+    
 ```{r pm_das, dependson="winsorize", cache=TRUE}
-reg_data <-
+reg_data <-                           # 21880 observations
     sho_accruals %>%
     mutate(leverage = leverage/100,
            year = year(datadate),
@@ -542,11 +894,32 @@ reg_data <-
            da1_adj, da2_adj, da3_adj, da4_adj, 
            da_lr1_adj, da_lr2_adj, da_lr3_adj, da_lr4_adj,
            year, during, post, pilot, pilot_during, pilot_post)
+
+# Exclude 2004 data from the sample
+reg_data_exc <-                         # 19791 observations
+    sho_accruals %>%
+    mutate(leverage = leverage/100,
+           year = year(datadate),
+           during = year %in% c(2005, 2006, 2007),
+           post = year %in% c(2008, 2009, 2010),
+           log_at = log(at),
+           pilot = sho,
+           pilot_during = pilot * during,
+           pilot_post = pilot * post) %>%
+    filter (year != 2004) %>%
+    select(gvkey, fyear, log_at, leverage, mtob, roa,
+           da1_adj, da2_adj, da3_adj, da4_adj, 
+           da_lr1_adj, da_lr2_adj, da_lr3_adj, da_lr4_adj,
+           year, during, post, pilot, pilot_during, pilot_post)
 ```
 
-- Some of the studies discussed by BDLYY exclude 2004 data from the sample.
-How would you modify the above code to do this here?
+- Some of the studies discussed by BDLYY exclude 2004 data from the sample. How would you modify the above code to do this here?
+  
+  A: Add a line of code 'filter (year != 2004) %>%', as shown in 'reg_data_exc' above, but if we want to exclude 2004, we may need to exclude 2004 before winsorization because winsorization usually happens at the last step?
+  
 - Would excluding 2004 here make a significant difference?
+  
+  A: The coefficients of pilot_during are less significant and with smaller magnitudes.
 
 ## Regression analysis
 
@@ -556,7 +929,8 @@ lhs <- c("da1_adj", "da2_adj", "da3_adj", "da4_adj",
 controls <- c("log_at", "mtob", "roa", "leverage")
 
 reg_year_fe <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
-    model <- paste0(y, " ~ pilot_during + pilot_post + pilot + ",
+    model <- paste0(y, " ~ pilot_during + pilot_post + pilot + ", 
+                    # Should be " ~ pilot_during + pilot_post + pilot + during + post + "? But 'Error in eval(predvars, data, env) : object 'postlog_at' not found'
                       paste(controls, collapse = " + "),
                       if_else(firm_fe, "| gvkey + year ", "| year "),
                     "| 0 ",
@@ -564,12 +938,27 @@ reg_year_fe <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
     fm <- felm(as.formula(model), data = reg_data)
     fm
 }
+
+# Do not define the interaction term, but use multiply operator directly
+reg_year_fe_al <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
+    model <- paste0(y, "  pilot * during * post + ", 
+                      paste(controls, collapse = " + "),
+                      if_else(firm_fe, "| gvkey + year ", "| year "),
+                    "| 0 ",
+                    if_else(!cl_2, "| gvkey ", "| year + gvkey"))
+    fm_al <- felm(as.formula(model), data = reg_data)
+    fm_al
+}
+
+
 ```
 
-- Code in the previous subsection creates variables `pilot_during` and `pilot_post`. 
-Is it necessary to do so to estimate the regressions here? 
-If not how would you modify the string `" ~ pilot_during + pilot_post + pilot + ",` 
-in the code above to not use these variables? 
+- Code in the previous subsection creates variables `pilot_during` and `pilot_post`. Is it necessary to do so to estimate the regressions here? If not, how would you modify the string `" ~ pilot_during + pilot_post + pilot + ",`in the code above to not use these variables? 
+  
+  A: Compared to Model (5) on FHK Page 1268, 'reg_year_fe' does not have 'during' and 'post'. The string should be " ~ pilot_during + pilot_post + pilot + during + post +  ", but when I change the string, there is an error 'Error in eval(predvars, data, env) : object 'postlog_at' not found'.
+  
+     If we do not use the line 'omit=paste0("^(", paste(controls, collapse="|"), ")$")', the table indeed does not include the variable 'during' and 'post', so are 'during' and 'post' included in the regression?
+
 
 ```{r reg_no_firm_fes, echo=FALSE, warning=FALSE, message=FALSE, results="asis"}
 fm_year_fe <- lapply(lhs, reg_year_fe, firm_fe = FALSE, cl_2 = TRUE)
@@ -578,6 +967,27 @@ stargazer(fm_year_fe,
           column.labels = gsub("_", "\\\\_", lhs),
           header=FALSE,
           keep.stat = c("n", "rsq", "chi2"))
+
+# I find that it takes longer time to transfer the output to PDF, so I define 'type = 'text'' to  quickly compare results with different designs as we mentioned in previous subsections.
+
+fm_year_fe <- lapply(lhs, reg_year_fe, firm_fe = FALSE, cl_2 = TRUE)
+stargazer(fm_year_fe, 
+          omit=paste0("^(", paste(controls, collapse="|"), ")$"),
+          column.labels = gsub("_", "\\\\_", lhs),
+          header=FALSE,
+          keep.stat = c("n", "rsq", "chi2"),
+          type = 'text',
+          title = "Change filtering code in producing 'controls(a)' with cl2")
+
+
+# Use multiply operator, instead of pre-defined interaction
+# fm_year_fe_al <- lapply(lhs, reg_year_fe_al, firm_fe = FALSE, cl_2 = TRUE)
+#stargazer(fm_year_fe_al, 
+#          omit=paste0("^(", paste(controls, collapse="|"), ")$"),
+#          column.labels = gsub("_", "\\\\_", lhs),
+#         header=FALSE,
+#         keep.stat = c("n", "rsq", "chi2"))
+# I do not know why using multiply operator does not work.
 ```
 
 ```{r reg_firm_fes, echo=FALSE, warning=FALSE, message=FALSE, results="asis"}
@@ -586,8 +996,12 @@ stargazer(fm_firm_fe,
           header=FALSE, 
           omit=paste0("^(", paste(c("pilot", controls), collapse="|"), ")$"),
           column.labels = gsub("_", "\\\\_", lhs),
-          keep.stat = c("n", "rsq", "chi2"))
+          keep.stat = c("n", "rsq", "chi2"),
+          type = 'text',
+          title = "Change filtering code in producing 'controls(a) without cl2'")
+
 ```
+
 \newpage
 
 ## Plot coefficients
@@ -598,7 +1012,7 @@ stargazer(fm_firm_fe,
 sho_total_accruals <-
     sho_firm_years %>%
     left_join(df_controls, 
-              by = c("gvkey", "fyear")) %>%
+              by = c("gvkey", "fyear","datadate")) %>%
     left_join(for_disc_accruals, 
               by = c("gvkey", "fyear")) %>%
     mutate(year = as.factor(year(datadate)))
@@ -609,7 +1023,7 @@ reg_data_alt <-
 
 reg_alt <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
     
-    model <- paste0(y, " ~ year * pilot - pilot - 1 + ",
+    model <- paste0(y, " ~ year * pilot - pilot - 1 + ",   # Why '- pilot'?
                       paste(controls, collapse = " + "),
                       if_else(firm_fe, "| gvkey ", "| 0 "),
                     "| 0 ",
@@ -647,3 +1061,55 @@ results_by_year %>%
                   color = NA, alpha=0.01) +
     facet_wrap(~ dv, ncol = 2)
 ```
+```{r total accruals, include=FALSE}
+sho_total_accruals <-
+    sho_firm_years %>%       #Original data provided by FHK
+    left_join(df_controls, 
+              by = c("gvkey", "fyear","datadate")) %>%
+    left_join(for_disc_accruals,                      # Has matched FF48, though not adjust total accruals, no winsorization
+              by = c("gvkey", "fyear")) %>%
+    mutate(year = as.factor(year(datadate)),
+           pilot = sho)               # I add this line of code
+
+reg_alt_total <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
+    
+    model <- paste0(y, " ~ year * pilot - pilot - 1  "   
+                      # paste(controls, collapse = " + "), excluding controls, but does the requirement that'so the coefficients will be simple conditional sample means' mean that firm_fe and cl_2 are also not included?
+                     # if_else(firm_fe, "| gvkey ", "| 0 "),
+                    #"| 0 ",
+                   # if_else(!cl_2, "| gvkey ", "| year + gvkey")
+                   )
+    fm <- felm(as.formula(model), data = sho_total_accruals)
+    fm
+}
+
+lhs_total <- c("ta_at")
+
+fm_ta_total <- lapply(lhs_total, reg_alt_total, firm_fe = FALSE, cl_2 = TRUE)
+
+extract_coefficients <- function(model) {
+     as_tibble(t(model[["coefficients"]])) %>%
+        mutate(dv = colnames(model$coefficients))
+}
+
+results_by_year_total <- 
+    bind_rows(lapply(fm_ta_total, extract_coefficients)) %>% 
+    pivot_longer(!matches("dv")) %>%
+    filter(grepl("^year.", name)) %>%
+    separate(name, into=c("year", "pilot"), sep=":", fill="right") %>%
+    mutate(year = gsub("^year", "", year),
+           pilot = case_when(pilot == "pilot" ~ TRUE,
+                             TRUE ~ FALSE)) %>%
+    mutate(year = as.integer(year))
+```
+
+```{r}
+results_by_year_total %>%
+    ggplot(aes(x = year, y=value, color = pilot)) +
+    geom_line() +
+    scale_x_continuous(breaks=2000:2012L) +
+    geom_rect(xmin=2005, xmax=2007, ymin=-Inf, ymax=Inf,
+                  color = NA, alpha=0.01) +
+    facet_wrap(~ dv, ncol = 2)
+```
+
