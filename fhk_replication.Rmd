@@ -3,9 +3,9 @@ title: "FHK replication"
 author: "Ian Gow"
 date: '2020-10-13'
 output:
+  pdf_document: default
   html_document:
     df_print: paged
-  pdf_document: default
 classoption: landscape
 ---
 
@@ -976,7 +976,6 @@ stargazer(fm_year_fe,
           column.labels = gsub("_", "\\\\_", lhs),
           header=FALSE,
           keep.stat = c("n", "rsq", "chi2"),
-          type = 'text',
           title = "Change filtering code in producing 'controls(a)' with cl2")
 
 
@@ -997,7 +996,6 @@ stargazer(fm_firm_fe,
           omit=paste0("^(", paste(c("pilot", controls), collapse="|"), ")$"),
           column.labels = gsub("_", "\\\\_", lhs),
           keep.stat = c("n", "rsq", "chi2"),
-          type = 'text',
           title = "Change filtering code in producing 'controls(a) without cl2'")
 
 ```
