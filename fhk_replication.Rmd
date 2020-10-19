@@ -126,7 +126,7 @@ Based on my analysis, these are the correct GVKEY matches and all three cases sh
 |--------|-------|
 | JEF    | 006239|
 | FLR    | 004818|
-| MRO    | 010970|
+| MRO    | 007017|
 
 - Picking one of these tickers, how can you match that ticker to the GVKEY value I have provided? Do you agree with my approach?
 
