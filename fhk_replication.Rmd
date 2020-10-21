@@ -1,5 +1,5 @@
 ---
-title: "FHK replication"
+title: "FHK replication: Using BDLYY SHO data"
 author: "Ian Gow"
 date: '2020-10-13'
 output:
@@ -18,6 +18,8 @@ knitr::opts_chunk$set(echo = TRUE)
 This document reproduces the results found in Table 15 and 16 of *Reply to "The Reg SHO Reanalysis Project: Reconsidering Fang, Huang and Karpoff (2016) on Reg SHO and Earnings Management" by Black et al. (2019)* (available on SSRN [here](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3507033)).
 The tables provide results for regressions of performance-matched discretionary accruals on a treatment indicator, *PILOT*, two post-treatment indicators, *DURING* and *POST*, and interactions, *PILOT $\times$ DURING* ($\mathit{pilot\_during}$) and *PILOT $\times$ POST* ($\mathit{pilot\_post}$).
 The coefficient of primary interest is that on *PILOT $\times$ DURING*.
+
+This particular version uses SHO data supplied by [the BDLYY team](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3657196).
 
 To run this code, you will need:
 
@@ -53,97 +55,23 @@ Sys.setenv(PGHOST="wrds-pgdata.wharton.upenn.edu", PGDATABASE="wrds", PGPORT=973
 
 FHK use three data sources:
 
-1. SHO data, which combines data from the SEC with analysis by the authors
+1. SHO data, here supplied by [the BDLYY team](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3657196).
 2. Compustat
 3. Fama-French industry data
 
 ### SHO data
 
-We can gain insight into the construction of the SHO indicator by using two SAS data files that embed the data used by FHK.
-The following code reproduces the analysis by FHK.
-There are effectively two elements: `pilot` provides the `PILOT` indicator and `pmda` identifies the firm-years (`gvkey`-`fyear` values) to be considered.
-The file `pilot.sas7bdat` includes variables such as `lpermno` and `linkdt`, suggesting that the WRDS table `crsp.stocknames` was used in its construction.
+In this version of the analysis, I use data on SHO supplied by the BDLYY team.
 
 ```{r sho_data, cache=TRUE}
-pilot <- read_sas("data/pilot.sas7bdat")
-pmda <- read_sas("data/pmda.sas7bdat")
-
-sho_data <-
-    pilot %>%
-    select(gvkey1, SHO) %>%
-    distinct() %>%
-    group_by(gvkey1) %>%
-    filter(n() == 1) %>%
-    ungroup() %>%
-    inner_join(pilot, by = c("gvkey1", "SHO")) %>%
-    rename(sho = SHO) %>%
-    mutate(gvkey = str_pad(gvkey1, width = 6, side = "left", pad = "0")) %>%
-    select(gvkey, sho) 
+bdlyy_sample <- read_stata("data/bdlyy/FHK_OurSample.dta")
   
 sho_firm_years <-
-    pmda %>%
-    mutate(gvkey = str_pad(gvkey1, width = 6, side = "left", pad = "0")) %>%
-    select(-gvkey1) %>%
+    bdlyy_sample %>%
     filter(fyear >= 2000) %>%
-    inner_join(sho_data, by = "gvkey") %>%
+    rename(sho = sho_pilot) %>%
     select(gvkey, fyear, datadate, sho)
 ```
-
-In constructing the `PILOT` indicator, FHK omit cases (`gvkey1` values) where there is more than one distinct value for the indicator.
-A question is: Who are these firms? Why is there more than one value for `PILOT` for these firms? And does omission of these make sense?
-
-```{r dependson="sho_data"}
-sho_dupes <-
-    pilot %>%
-    select(gvkey1, SHO) %>%
-    distinct() %>%
-    group_by(gvkey1) %>%
-    filter(n() > 1) %>%
-    ungroup() %>%
-    inner_join(pilot, by = c("gvkey1", "SHO")) %>%
-    rename(sho = SHO) %>%
-    mutate(gvkey = str_pad(gvkey1, width = 6, side = "left", pad = "0")) %>%
-    select(gvkey, lpermno, rsticker, sho) %>%
-    arrange(gvkey)
-
-sho_dupes
-```
-
-From the analysis above, we see that tickers `X`, `ITG`, and `MEE` have zero for `sho`, but are associated with `gvkey` (and `permno`) values where `sho` is one for a different ticker.
-The ticker (`rsticker`) values in `sho.sas7bdat` seem to match those available on the SEC's [website]( https://www.sec.gov/rules/other/34-50104.htm).
-
-```{r stocknames, include=FALSE}
-pg <- dbConnect(RPostgres::Postgres())
-
-stocknames <- tbl(pg, sql("SELECT * FROM crsp.stocknames"))
-ccmxpf_linktable <- tbl(pg, sql("SELECT * FROM crsp.ccmxpf_linktable"))
-```
-
-Using the tables `crsp.stocknames` and `crsp.ccmxpf_linktable`, my conclusion is that the GVKEY matches for the tickers `JEF`, `FLR`, and `MRO` are simply wrong.
-Based on my analysis, these are the correct GVKEY matches and all three cases should be included with `sho` equal to one.
-
-| Ticker | GVKEY |
-|--------|-------|
-| JEF    | 006239|
-| FLR    | 004818|
-| MRO    | 007017|
-
-- Picking one of these tickers, how can you match that ticker to the GVKEY value I have provided? Do you agree with my approach?
-
-Fixing the issue with mismatched GVKEYs (and issues related to which firms should be used as controls) is complicated, so we won't attempt that here.
-
-But another issue is implicit in the code below:
-
-```{r dependson="sho_data"}
-sho_data %>% 
-  count(gvkey) %>% 
-  arrange(desc(n))
-```
-
-- What is the issue implied in the above? 
-How would you fix this issue?
-- Does fixing this issue affect the results in any way?
-Why or why not?
 
 ### Fama-French data
 
