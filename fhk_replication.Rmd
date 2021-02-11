@@ -166,7 +166,7 @@ How would you fix this issue?
 - Does fixing this issue affect the results in any way?
 Why or why not?
 
-Tony's comment: the issue is that 32 gvkeys appear in the SHO dataset for two times. It could be fixed by using `distinct()` function to remove the duplicates in the `sho_data`. Fixing this issue may not affect the results in any way because they are just duplicates.
+Tony's comments: the issue is that 32 gvkeys appear in the SHO dataset for two times. It could be fixed by using `distinct()` function to remove the duplicates in the `sho_data`. Fixing this issue may not affect the results in any way because they are just duplicates.
 
 ```{r dependson="sho_data"}
 sho_data %>% 
@@ -295,6 +295,7 @@ Tony's comments:
 - With the creation of `controls_b`, the authors are populating missing values with the most recent available values (no matter how stale they are). I am not quite sure this is appropriate. There is a trade-off between sample size and data accuracy in this case.
 - With the creation of `df_controls` from `controls_fyear`, the authors are populating missing values with yearly average of non-misssing values. I am not sure this is appropriate. Similar to the previous treatment.
 - I would change the code to skip the two steps above as follows. Doing so will not make a significant difference. Doing the treatment as the authors did only increase the controls sample size to 99,473 from 84,685, at the cost of adding measurement errors.
+
 ```{r controls, dependson="pg_data", cache=TRUE}
 df_controls_alt <- 	
     compustat_annual %>%
@@ -547,6 +548,7 @@ Tony's comments:
 - The line `mutate(fyear = fyear + 1)` add one to the fyear for `compustat_annual` so that the inner_join will actually match `perf` with `compustat_annual` for the previous fyear to get the lagged ib_at.
 
 An alternative approach is to use lag, which will give the same result.
+
 ```{r pmdas, dependson=c("est_das", "pg_data"), cache=TRUE}
 perf_alt <-
     compustat_annual %>%
@@ -791,8 +793,9 @@ How would you modify the code to winsorize "across sample years? Does it make a 
 - How would you modify the code to winsorize at the 2%/98% level? Does this make a difference?
 - How would you modify the code to not winsorize at all? Does this make a difference?
 
-Tony's Comments:
+Tony's comments:
 - To winsorize "across sample years", the code should be modified as the following (need: install.packages("arsenal") before running the code). This makes a difference.
+
 ```{r winsorize, dependson="merge_controls", cache=TRUE}
 sho_accruals_alt <-
     sho_accruals_prewin %>%
@@ -848,6 +851,7 @@ How would you modify the above code to do this here?
 
 Tony's comments:
 - To exclude 2004 data from the sample, the code could be modified as the following. This makes a difference (At least, the sample size will be different)
+
 ```{r pm_das, dependson="winsorize", cache=TRUE}
 reg_data_alt <-
     sho_accruals %>%
@@ -890,8 +894,9 @@ Is it necessary to do so to estimate the regressions here?
 If not how would you modify the string `" ~ pilot_during + pilot_post + pilot + ",` 
 in the code above to not use these variables? 
 
-Tony's Comments:
+Tony's comments:
 Probably not necessary. To not use these variables, run the following code:
+
 ```{r reg_functions, cache=FALSE}
 lhs <- c("da1_adj", "da2_adj", "da3_adj", "da4_adj",
          "da_lr1_adj", "da_lr2_adj", "da_lr3_adj", "da_lr4_adj")
@@ -984,9 +989,9 @@ results_by_year %>%
     facet_wrap(~ dv, ncol = 2)
 ```
 
-Tony's Comments:
+Tony's comments:
+- The following codes exclude controls (so the coefficients will be simple conditional sample means). But where is the total accruals?
 
-- The following codes use total accruals and exclude controls (so the coefficients will be simple conditional sample means).
 ```{r alt_reg_functions, include=FALSE}
 sho_total_accruals <-
     sho_firm_years %>%
@@ -997,7 +1002,7 @@ sho_total_accruals <-
     mutate(year = as.factor(year(datadate)))
 
 reg_data_alt <- 
-    sho_total_accruals %>%
+    reg_data %>%
     mutate(year = as.factor(year))
 
 reg_alt <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
@@ -1012,7 +1017,8 @@ reg_alt <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
 ```
 
 ```{r reg_alt, include=FALSE}
-reg_alt <- reg_alt(ta_at, firm_fe = FALSE, cl_2 = TRUE)
+
+fm_ta <- lapply(lhs, reg_alt, firm_fe = FALSE, cl_2 = TRUE)
 
 extract_coefficients <- function(model) {
      as_tibble(t(model[["coefficients"]])) %>%
