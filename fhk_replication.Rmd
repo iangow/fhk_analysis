@@ -130,6 +130,27 @@ Based on my analysis, these are the correct GVKEY matches and all three cases sh
 
 - Picking one of these tickers, how can you match that ticker to the GVKEY value I have provided? Do you agree with my approach?
 
+Tony's comments: I agree with your approach. From the SEC's [website]( https://www.sec.gov/rules/other/34-50104.htm), we can clearly see that tickers `JEF`(JEFFERIES GROUP INC) , `FLR`(FLUOR CORP) , and `MRO`(MARATHON OIL CORP) are all in the Pilot list. As gvkey is a permanent unique firm identifier, and a firm is either in or not in the list, two `PILOT` values for a gvkey must be a bad match. In addition, omission of these due to a matching failure does not make sense. The following code can be used to get the right gvkeys(but I am having this different: did I miss something?):
+
+```{r stocknames, include=FALSE}
+library(lubridate)
+
+sho_dupes_correctgvkey <-
+    pilot %>%
+    filter(SHO==1) %>%  
+    inner_join(sho_dupes, by = "rsticker") %>%
+    select(rsticker, RSNAME) %>%
+    rename(ticker = rsticker) %>%
+    inner_join(stocknames, by = "ticker",`copy` = TRUE) %>%
+    filter (year(namedt) <= 2004 & 2004 <= year(nameenddt)) %>%
+    rename(lpermno = permno) %>%
+    inner_join(ccmxpf_linktable, by = "lpermno",`copy` = TRUE) %>%
+    filter (year(linkdt) <= 2004) %>%
+    filter ((year(linkenddt) >= 2004) | is.na(linkenddt)) %>%
+    select(ticker, gvkey)
+
+sho_dupes_correctgvkey
+```
 Fixing the issue with mismatched GVKEYs (and issues related to which firms should be used as controls) is complicated, so we won't attempt that here.
 
 But another issue is implicit in the code below:
@@ -144,6 +165,15 @@ sho_data %>%
 How would you fix this issue?
 - Does fixing this issue affect the results in any way?
 Why or why not?
+
+Tony's comments: the issue is that 32 gvkeys appear in the SHO dataset for two times. It could be fixed by using `distinct()` function to remove the duplicates in the `sho_data`. Fixing this issue may not affect the results in any way because they are just duplicates.
+
+```{r dependson="sho_data"}
+sho_data %>% 
+  distinct() %>%
+  count(gvkey) %>% 
+  arrange(desc(n))
+```
 
 ### Fama-French data
 
@@ -185,7 +215,6 @@ ff_data <-
     rename(ff48 = ff_ind) %>%
     select(ff48, sich)
 ```
-
 - Set `num <- 48` and work through the body of the `get_ff_ind` function line by line?
 Do you understand what the code is doing?
 - What are these lines doing? 
@@ -193,6 +222,10 @@ Do you understand what the code is doing?
     mutate(sich = list(seq(from = sic_min, to = sic_max))) %>% 
         unnest(sich) %>% 
 ```
+
+Tony's comments: the `get_ff_ind` function is easy to follow. The function directly downloads Fama French industry classification tables and transforms them into ready-to-merge rectangular tables.
+These lines generate the sequence from sic_min to sic_max, and combine all the objects in the sequence (each represents an SICH belonging to the corresponding ff48) into a list, for each row in the ff_data(48) table.
+
 ### Compustat data
 
 We can get the data we need from the WRDS PostgreSQL database.
@@ -256,6 +289,29 @@ Does this seem appropriate?
 Does this seem appropriate?
 - How would you change the code to skip the two steps above? 
 Does doing so make a difference?
+
+Tony's comments:
+- `filter(fyear == lag(fyear) + 1)` is required to make sure the lagged values are actually from the previous fyear, instead of two or more years before.
+- With the creation of `controls_b`, the authors are populating missing values with the most recent available values (no matter how stale they are). I am not quite sure this is appropriate. There is a trade-off between sample size and data accuracy in this case.
+- With the creation of `df_controls` from `controls_fyear`, the authors are populating missing values with yearly average of non-misssing values. I am not sure this is appropriate. Similar to the previous treatment.
+- I would change the code to skip the two steps above as follows. Doing so will not make a significant difference. Doing the treatment as the authors did only increase the controls sample size to 99,473 from 84,685, at the cost of adding measurement errors.
+
+```{r controls, dependson="pg_data", cache=TRUE}
+df_controls_alt <- 	
+    compustat_annual %>%
+    filter(!between(sich, 6000, 6999) | !between(sich, 4900, 4949)) %>%
+    group_by(gvkey) %>%
+    arrange(fyear) %>%
+    mutate(lag_fyear = lag(fyear),
+           mtob = if_else(lag(ceq) != 0, 
+                          lag(csho) * lag(prcc_f)/lag(ceq), NA_real_),
+           leverage = if_else(dltt + dlc + seq != 0, 
+                              (dltt + dlc) / (dltt + dlc + seq) * 100, NA_real_),
+           roa = if_else(lag(at) > 0, oibdp/lag(at), NA_real_)) %>%
+    filter(fyear == lag(fyear) + 1) %>%
+    select(gvkey, datadate, fyear, at, mtob, leverage, roa) %>%
+    filter(!is.na(at), !is.na(mtob), !is.na(leverage), !is.na(roa)==0)
+```
 
 ```{r for_disc_accruals, dependson=c("ff_data", "pg_data"), cache=TRUE}
 ind_data <-
@@ -431,6 +487,13 @@ merged <-
 and the even-numbered datasets (e.g., `df_da2`).
 - Does the argument for using `salerect_c_at * b_sale_c_at` make sense to you?
 
+Tony's comments: 
+- The codes look different for the odd-numbered datasets and the even-numbered datasets because they calculate DAs differently. The odd-numbered datasets first estimate a modified Jones model with intercept term. Then they used the model to get the fitted normal accruals. Then the da is calculated as the difference between the total accruals and the fitted normal accruals. In contrast, the even-numbered datasets estimate a modified Jones model without the intercept term, and da is calculated as the residue.
+
+- Does the argument for using `salerect_c_at * b_sale_c_at` make sense to you?
+Although it claims to have followed Dechow, Sloan, and Sweeney (1995), I am not very sure whether its argument that credit sales might also
+provide a potential opportunity for accounting distortion makes sense to me, because it is meant to calculate fitted normal accruals. In addition, it is a bit weird to use the coefficient and a different underlying variable to calculate fitted normal accruals.
+
 ### Performance-matching code
 
 ```{r pmdas, dependson=c("est_das", "pg_data"), cache=TRUE}
@@ -481,6 +544,208 @@ Does this give the same result?
 If so, which aspect of the code ensures this is true? 
 If not, how might you ensure this? (Just describe the approach in general; no need to do this.)
 
+Tony's comments:
+- The line `mutate(fyear = fyear + 1)` add one to the fyear for `compustat_annual` so that the inner_join will actually match `perf` with `compustat_annual` for the previous fyear to get the lagged ib_at.
+
+An alternative approach is to use lag, which will give the same result.
+
+```{r pmdas, dependson=c("est_das", "pg_data"), cache=TRUE}
+perf_alt <-
+    compustat_annual %>%
+    group_by(gvkey) %>%
+    arrange(fyear) %>%
+    mutate(lag_fyear = lag(fyear),
+           ib_at = if_else(lag(at) > 0, lag(ib)/lag(at), NA_real_)) %>%
+    filter(fyear == lag(fyear) + 1) %>%
+    inner_join(merged, by = c("gvkey", "fyear")) %>%
+    select(gvkey, fyear, ff48, ib_at)
+```
+
+-The code above does not ensure that a performance-matched control firm is used as a control just once. 
+```{r pmdas, dependson=c("est_das", "pg_data"), cache=TRUE}
+perf_match %>%
+    group_by(fyear) %>%
+    count(gvkey_other) %>%
+    arrange(desc(n))
+```
+The following can be written into a nice loop, or a function. But it seems work
+```{r pmdas, dependson=c("est_das", "pg_data"), cache=TRUE}
+perf_match_alt1 <-
+    perf %>%
+    inner_join(perf, by = c("fyear", "ff48"),
+               suffix = c("", "_other")) %>%
+    filter(gvkey != gvkey_other) %>%
+    mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
+    group_by(fyear, gvkey_other) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() %>%
+    group_by(gvkey, fyear) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() 
+
+perf_needmatch <-
+    perf %>%
+    anti_join(perf_match_alt1, by = c("fyear", "gvkey"))
+
+perf_availformatch <-
+    perf %>%
+    anti_join((perf_match_alt1 %>% select(fyear, gvkey_other) %>% rename(gvkey=gvkey_other)), by = c("fyear", "gvkey"))
+
+
+perf_match_alt2 <-
+    perf_needmatch %>%
+    inner_join(perf_availformatch, by = c("fyear", "ff48"),
+               suffix = c("", "_other")) %>%
+    filter(gvkey != gvkey_other) %>%
+    mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
+    group_by(fyear, gvkey_other) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() %>%
+    group_by(gvkey, fyear) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() 
+
+perf_needmatch <-
+   perf_needmatch %>%
+    anti_join(perf_match_alt2, by = c("fyear", "gvkey"))
+
+perf_availformatch <-
+    perf_availformatch %>%
+    anti_join((perf_match_alt2 %>% select(fyear, gvkey_other) %>% rename(gvkey=gvkey_other)), by = c("fyear", "gvkey"))
+
+
+perf_match_alt3 <-
+    perf_needmatch %>%
+    inner_join(perf_availformatch, by = c("fyear", "ff48"),
+               suffix = c("", "_other")) %>%
+    filter(gvkey != gvkey_other) %>%
+    mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
+    group_by(fyear, gvkey_other) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() %>%
+    group_by(gvkey, fyear) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() 
+
+perf_needmatch <-
+   perf_needmatch %>%
+    anti_join(perf_match_alt3, by = c("fyear", "gvkey"))
+
+perf_availformatch <-
+    perf_availformatch %>%
+    anti_join((perf_match_alt3 %>% select(fyear, gvkey_other) %>% rename(gvkey=gvkey_other)), by = c("fyear", "gvkey"))
+
+perf_match_alt4 <-
+    perf_needmatch %>%
+    inner_join(perf_availformatch, by = c("fyear", "ff48"),
+               suffix = c("", "_other")) %>%
+    filter(gvkey != gvkey_other) %>%
+    mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
+    group_by(fyear, gvkey_other) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() %>%
+    group_by(gvkey, fyear) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() 
+
+perf_needmatch <-
+   perf_needmatch %>%
+    anti_join(perf_match_alt4, by = c("fyear", "gvkey"))
+
+perf_availformatch <-
+    perf_availformatch %>%
+    anti_join((perf_match_alt4 %>% select(fyear, gvkey_other) %>% rename(gvkey=gvkey_other)), by = c("fyear", "gvkey"))
+
+perf_match_alt5 <-
+    perf_needmatch %>%
+    inner_join(perf_availformatch, by = c("fyear", "ff48"),
+               suffix = c("", "_other")) %>%
+    filter(gvkey != gvkey_other) %>%
+    mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
+    group_by(fyear, gvkey_other) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() %>%
+    group_by(gvkey, fyear) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() 
+
+perf_needmatch <-
+   perf_needmatch %>%
+    anti_join(perf_match_alt5, by = c("fyear", "gvkey"))
+
+perf_availformatch <-
+    perf_availformatch %>%
+    anti_join((perf_match_alt5 %>% select(fyear, gvkey_other) %>% rename(gvkey=gvkey_other)), by = c("fyear", "gvkey"))
+
+
+perf_match_alt6 <-
+    perf_needmatch %>%
+    inner_join(perf_availformatch, by = c("fyear", "ff48"),
+               suffix = c("", "_other")) %>%
+    filter(gvkey != gvkey_other) %>%
+    mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
+    group_by(fyear, gvkey_other) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() %>%
+    group_by(gvkey, fyear) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() 
+
+perf_needmatch <-
+   perf_needmatch %>%
+    anti_join(perf_match_alt6, by = c("fyear", "gvkey"))
+
+perf_availformatch <-
+    perf_availformatch %>%
+    anti_join((perf_match_alt6 %>% select(fyear, gvkey_other) %>% rename(gvkey=gvkey_other)), by = c("fyear", "gvkey"))
+
+
+perf_match_alt7 <-
+    perf_needmatch %>%
+    inner_join(perf_availformatch, by = c("fyear", "ff48"),
+               suffix = c("", "_other")) %>%
+    filter(gvkey != gvkey_other) %>%
+    mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
+    group_by(fyear, gvkey_other) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() %>%
+    group_by(gvkey, fyear) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() 
+
+perf_needmatch <-
+   perf_needmatch %>%
+    anti_join(perf_match_alt7, by = c("fyear", "gvkey"))
+
+perf_availformatch <-
+    perf_availformatch %>%
+    anti_join((perf_match_alt7 %>% select(fyear, gvkey_other) %>% rename(gvkey=gvkey_other)), by = c("fyear", "gvkey"))
+
+
+perf_match_alt8 <-
+    perf_needmatch %>%
+    inner_join(perf_availformatch, by = c("fyear", "ff48"),
+               suffix = c("", "_other")) %>%
+    filter(gvkey != gvkey_other) %>%
+    mutate(perf_diff = abs(ib_at - ib_at_other)) %>%
+    group_by(fyear, gvkey_other) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() %>%
+    group_by(gvkey, fyear) %>%
+    filter(perf_diff == min(perf_diff)) %>%
+    ungroup() 
+
+
+perf_match_alt <- union(perf_match_alt1,perf_match_alt2,perf_match_alt3,perf_match_alt4,perf_match_alt5,perf_match_alt6,perf_match_alt7)
+
+perf_match_alt %>%
+    group_by(fyear) %>%
+    count(gvkey_other) %>%
+    arrange(desc(n))
+
+```
+
+
 ## Data preparation
 
 ### Merge data sets
@@ -528,6 +793,41 @@ How would you modify the code to winsorize "across sample years? Does it make a 
 - How would you modify the code to winsorize at the 2%/98% level? Does this make a difference?
 - How would you modify the code to not winsorize at all? Does this make a difference?
 
+Tony's comments:
+- To winsorize "across sample years", the code should be modified as the following (need: install.packages("arsenal") before running the code). This makes a difference.
+
+```{r winsorize, dependson="merge_controls", cache=TRUE}
+sho_accruals_alt <-
+    sho_accruals_prewin %>%
+    mutate_at(all_of(win_vars), winsorize, prob=0.01) %>%
+    ungroup()
+
+library(arsenal)
+comparedf(sho_accruals, sho_accruals_alt)
+```
+- To winsorize at the 2%/98% level, the code should be modified as the following. This makes a difference.
+```{r winsorize, dependson="merge_controls", cache=TRUE}
+sho_accruals_alt <-
+    sho_accruals_prewin %>%
+    group_by(fyear) %>%
+    mutate_at(all_of(win_vars), winsorize, prob=0.02) %>%
+    ungroup()
+
+comparedf(sho_accruals, sho_accruals_alt)
+```
+- We don't need code to not winsorize at all. But if do want to use the function, we can do as the following as well. And winsorization does make a difference.
+```{r winsorize, dependson="merge_controls", cache=TRUE}
+comparedf(sho_accruals_prewin, sho_accruals_alt)
+
+sho_accruals_alt <-
+    sho_accruals_prewin %>%
+    group_by(fyear) %>%
+    mutate_at(all_of(win_vars), winsorize, prob=0) %>%
+    ungroup()
+comparedf(sho_accruals_prewin, sho_accruals_alt)
+comparedf(sho_accruals, sho_accruals_alt)
+```
+
 ```{r pm_das, dependson="winsorize", cache=TRUE}
 reg_data <-
     sho_accruals %>%
@@ -549,6 +849,28 @@ reg_data <-
 How would you modify the above code to do this here?
 - Would excluding 2004 here make a significant difference?
 
+Tony's comments:
+- To exclude 2004 data from the sample, the code could be modified as the following. This makes a difference (At least, the sample size will be different)
+
+```{r pm_das, dependson="winsorize", cache=TRUE}
+reg_data_alt <-
+    sho_accruals %>%
+    mutate(leverage = leverage/100,
+           year = year(datadate),
+           during = year %in% c(2005, 2006, 2007),
+           post = year %in% c(2008, 2009, 2010),
+           log_at = log(at),
+           pilot = sho,
+           pilot_during = pilot * during,
+           pilot_post = pilot * post) %>%
+    select(gvkey, fyear, log_at, leverage, mtob, roa,
+           da1_adj, da2_adj, da3_adj, da4_adj, 
+           da_lr1_adj, da_lr2_adj, da_lr3_adj, da_lr4_adj,
+           year, during, post, pilot, pilot_during, pilot_post) %>%
+  filter(year!=2004)
+
+comparedf(reg_data, reg_data_alt)
+```
 ## Regression analysis
 
 ```{r reg_functions, cache=FALSE}
@@ -572,6 +894,24 @@ Is it necessary to do so to estimate the regressions here?
 If not how would you modify the string `" ~ pilot_during + pilot_post + pilot + ",` 
 in the code above to not use these variables? 
 
+Tony's comments:
+Probably not necessary. To not use these variables, run the following code:
+
+```{r reg_functions, cache=FALSE}
+lhs <- c("da1_adj", "da2_adj", "da3_adj", "da4_adj",
+         "da_lr1_adj", "da_lr2_adj", "da_lr3_adj", "da_lr4_adj")
+controls <- c("log_at", "mtob", "roa", "leverage")
+
+reg_year_fe <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
+    model <- paste0(y, " ~ pilot + ",
+                      paste(controls, collapse = " + "),
+                      if_else(firm_fe, "| gvkey + year ", "| year "),
+                    "| 0 ",
+                    if_else(!cl_2, "| gvkey ", "| year + gvkey"))
+    fm <- felm(as.formula(model), data = reg_data)
+    fm
+}
+```
 ```{r reg_no_firm_fes, echo=FALSE, warning=FALSE, message=FALSE, results="asis"}
 fm_year_fe <- lapply(lhs, reg_year_fe, firm_fe = FALSE, cl_2 = TRUE)
 stargazer(fm_year_fe, 
@@ -621,6 +961,63 @@ reg_alt <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
 ```
 
 ```{r reg_alt, include=FALSE}
+fm_ta <- lapply(lhs, reg_alt, firm_fe = FALSE, cl_2 = TRUE)
+
+extract_coefficients <- function(model) {
+     as_tibble(t(model[["coefficients"]])) %>%
+        mutate(dv = colnames(model$coefficients))
+}
+
+results_by_year <- 
+    bind_rows(lapply(fm_ta, extract_coefficients)) %>% 
+    pivot_longer(!matches("dv")) %>%
+    filter(grepl("^year.", name)) %>%
+    separate(name, into=c("year", "pilot"), sep=":", fill="right") %>%
+    mutate(year = gsub("^year", "", year),
+           pilot = case_when(pilot == "pilot" ~ TRUE,
+                             TRUE ~ FALSE)) %>%
+    mutate(year = as.integer(year))
+```
+
+```{r coef_plot, echo=FALSE, fig.height=7, fig.width=10}
+results_by_year %>%
+    ggplot(aes(x = year, y=value, color = pilot)) +
+    geom_line() +
+    scale_x_continuous(breaks=2000:2012L) +
+    geom_rect(xmin=2005, xmax=2007, ymin=-Inf, ymax=Inf,
+                  color = NA, alpha=0.01) +
+    facet_wrap(~ dv, ncol = 2)
+```
+
+Tony's comments:
+- The following codes exclude controls (so the coefficients will be simple conditional sample means). But where is the total accruals?
+
+```{r alt_reg_functions, include=FALSE}
+sho_total_accruals <-
+    sho_firm_years %>%
+    left_join(df_controls, 
+              by = c("gvkey", "fyear")) %>%
+    left_join(for_disc_accruals, 
+              by = c("gvkey", "fyear")) %>%
+    mutate(year = as.factor(year(datadate)))
+
+reg_data_alt <- 
+    reg_data %>%
+    mutate(year = as.factor(year))
+
+reg_alt <- function(y, firm_fe = FALSE, cl_2 = TRUE) {
+    
+    model <- paste0(y, " ~ year * pilot - pilot - 1 ",
+                      if_else(firm_fe, "| gvkey ", "| 0 "),
+                    "| 0 ",
+                    if_else(!cl_2, "| gvkey ", "| year + gvkey"))
+    fm <- felm(as.formula(model), data = reg_data_alt)
+    fm
+}
+```
+
+```{r reg_alt, include=FALSE}
+
 fm_ta <- lapply(lhs, reg_alt, firm_fe = FALSE, cl_2 = TRUE)
 
 extract_coefficients <- function(model) {
